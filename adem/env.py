@@ -14,13 +14,30 @@ from .models import ADEMAction, ADEMObservation, ADEMReward
 from .tasks import TASKS
 
 
+def _to_int(v) -> int:
+    """Convert any numeric type (including numpy) to Python int."""
+    return int(v)
+
+
+def _to_float(v) -> float:
+    """Convert any numeric type (including numpy) to Python float."""
+    return float(v)
+
+
+def _grid_to_int_list(arr: np.ndarray):
+    """Convert NxN numpy int array to nested Python list of ints."""
+    return [[int(arr[i][j]) for j in range(arr.shape[1])] for i in range(arr.shape[0])]
+
+
+def _grid_to_float_list(arr: np.ndarray, decimals: int = 3):
+    """Convert NxN numpy float array to nested Python list of floats."""
+    return [[round(float(arr[i][j]), decimals) for j in range(arr.shape[1])] for i in range(arr.shape[0])]
+
+
 class ADEMEnvironment:
     """
     Adaptive Disaster Evacuation Management environment.
-
-    A grid-based city simulation where the agent issues evacuation orders,
-    controls roads, and allocates resources to move civilians to safety
-    before/after hazards spread and kill.
+    Grid-based city simulation where agent issues evacuation orders.
     """
 
     DIRECTIONS = {
@@ -38,14 +55,13 @@ class ADEMEnvironment:
         self.cfg = copy.deepcopy(TASKS[task])
         self._seed = seed if seed is not None else self.cfg["seed"]
 
-        # Grids (initialized in reset)
         self.n: int = self.cfg["grid_size"]
-        self.population_grid: np.ndarray = np.zeros((self.n, self.n), dtype=int)
-        self.hazard_grid: np.ndarray = np.zeros((self.n, self.n), dtype=float)
-        self.road_blockages: np.ndarray = np.zeros((self.n, self.n), dtype=int)
-        self.congestion_levels: np.ndarray = np.zeros((self.n, self.n), dtype=float)
-        self.panic_levels: np.ndarray = np.zeros((self.n, self.n), dtype=float)
-        self.vulnerable_pop: np.ndarray = np.zeros((self.n, self.n), dtype=int)
+        self.population_grid: np.ndarray = np.zeros((self.n, self.n), dtype=np.int32)
+        self.hazard_grid: np.ndarray = np.zeros((self.n, self.n), dtype=np.float64)
+        self.road_blockages: np.ndarray = np.zeros((self.n, self.n), dtype=np.int32)
+        self.congestion_levels: np.ndarray = np.zeros((self.n, self.n), dtype=np.float64)
+        self.panic_levels: np.ndarray = np.zeros((self.n, self.n), dtype=np.float64)
+        self.vulnerable_pop: np.ndarray = np.zeros((self.n, self.n), dtype=np.int32)
 
         self.shelter_positions: Dict[str, Tuple[int, int]] = {}
         self.shelter_capacities: Dict[str, int] = {}
@@ -72,12 +88,12 @@ class ADEMEnvironment:
         self._np_rng = np.random.RandomState(self._seed)
         n = self.n
 
-        self.population_grid = np.zeros((n, n), dtype=int)
-        self.hazard_grid = np.zeros((n, n), dtype=float)
-        self.road_blockages = np.zeros((n, n), dtype=int)
-        self.congestion_levels = np.zeros((n, n), dtype=float)
-        self.panic_levels = np.zeros((n, n), dtype=float)
-        self.vulnerable_pop = np.zeros((n, n), dtype=int)
+        self.population_grid = np.zeros((n, n), dtype=np.int32)
+        self.hazard_grid = np.zeros((n, n), dtype=np.float64)
+        self.road_blockages = np.zeros((n, n), dtype=np.int32)
+        self.congestion_levels = np.zeros((n, n), dtype=np.float64)
+        self.panic_levels = np.zeros((n, n), dtype=np.float64)
+        self.vulnerable_pop = np.zeros((n, n), dtype=np.int32)
 
         # Place population clusters
         for center in self.cfg["population_centers"]:
@@ -106,16 +122,15 @@ class ADEMEnvironment:
         self.shelter_populations = {}
         for s in self.cfg["shelters"]:
             sid = s["id"]
-            pos = tuple(s["pos"])
-            self.shelter_positions[sid] = pos          # type: ignore[assignment]
-            self.shelter_capacities[sid] = s["capacity"]
+            pos = (int(s["pos"][0]), int(s["pos"][1]))
+            self.shelter_positions[sid] = pos
+            self.shelter_capacities[sid] = int(s["capacity"])
             self.shelter_populations[sid] = 0
-            # Shelter cells start empty of civilians
             self.population_grid[pos[0]][pos[1]] = 0
             self.vulnerable_pop[pos[0]][pos[1]] = 0
 
-        # Resources
-        self.available_resources = dict(self.cfg.get("resources", {"drones": 2, "ambulances": 1}))
+        # Resources — all Python ints
+        self.available_resources = {k: int(v) for k, v in self.cfg.get("resources", {"drones": 2, "ambulances": 1}).items()}
 
         self.total_initial_pop = int(self.population_grid.sum())
         self.evacuated = 0
@@ -123,7 +138,6 @@ class ADEMEnvironment:
         self.current_step = 0
         self.episode_rewards = []
 
-        # Initial panic for hard tasks
         if self.cfg.get("panic_enabled", False):
             for i in range(n):
                 for j in range(n):
@@ -133,10 +147,7 @@ class ADEMEnvironment:
         return self._build_observation()
 
     def step(self, action: ADEMAction) -> Tuple[ADEMObservation, float, bool, Dict[str, Any]]:
-        """
-        Advance environment one timestep.
-        Returns: (observation, reward, done, info)
-        """
+        """Advance environment one timestep. Returns (observation, reward, done, info)."""
         self.current_step += 1
         n = self.n
 
@@ -154,12 +165,12 @@ class ADEMEnvironment:
             try:
                 dx, dy = self._parse_key(action.deploy_drone)
                 if self._in_bounds(dx, dy):
-                    self.panic_levels[dx][dy] = max(0.0, self.panic_levels[dx][dy] - 0.30)
-                    self.available_resources["drones"] -= 1
+                    self.panic_levels[dx][dy] = max(0.0, float(self.panic_levels[dx][dy]) - 0.30)
+                    self.available_resources["drones"] = int(self.available_resources["drones"]) - 1
             except (ValueError, IndexError):
                 pass
 
-        # 3. Move population according to zone directions
+        # 3. Move population
         evacuated_step, casualties_step = self._apply_movement(action.zone_directions)
 
         # 4. Spread hazard
@@ -169,7 +180,7 @@ class ADEMEnvironment:
         step_casualties = self._apply_hazard_damage()
         casualties_step += step_casualties
 
-        # 6. Update congestion levels
+        # 6. Update congestion
         self._update_congestion()
 
         # 7. Update panic (hard task only)
@@ -182,81 +193,74 @@ class ADEMEnvironment:
 
         # 9. Done condition
         remaining = int(self.population_grid.sum())
-        done = (
+        done = bool(
             remaining == 0
             or self.current_step >= self.max_steps
             or self.casualties >= int(self.total_initial_pop * 0.6)
         )
 
-        info = {
-            "step": self.current_step,
-            "evacuated": self.evacuated,
-            "casualties": self.casualties,
-            "remaining": remaining,
-            "evacuated_this_step": evacuated_step,
-            "casualties_this_step": casualties_step,
+        # All info values explicitly cast to Python native types
+        info: Dict[str, Any] = {
+            "step": int(self.current_step),
+            "evacuated": int(self.evacuated),
+            "casualties": int(self.casualties),
+            "remaining": int(remaining),
+            "evacuated_this_step": int(evacuated_step),
+            "casualties_this_step": int(casualties_step),
         }
 
-        return self._build_observation(), reward, done, info
+        return self._build_observation(), float(reward), done, info
 
     def state(self) -> Dict[str, Any]:
         """Return current episode state summary."""
         remaining = int(self.population_grid.sum())
         return {
-            "task": self.task_name,
-            "step": self.current_step,
-            "max_steps": self.max_steps,
-            "total_initial_population": self.total_initial_pop,
-            "evacuated": self.evacuated,
-            "casualties": self.casualties,
-            "remaining": remaining,
+            "task": str(self.task_name),
+            "step": int(self.current_step),
+            "max_steps": int(self.max_steps),
+            "total_initial_population": int(self.total_initial_pop),
+            "evacuated": int(self.evacuated),
+            "casualties": int(self.casualties),
+            "remaining": int(remaining),
             "hazard_cells": int((self.hazard_grid > 0.5).sum()),
             "blocked_roads": int(self.road_blockages.sum()),
-            "shelter_populations": dict(self.shelter_populations),
+            "shelter_populations": {k: int(v) for k, v in self.shelter_populations.items()},
         }
 
     def compute_final_score(self) -> Dict[str, float]:
-        """
-        Deterministic grader — produces score in [0.0, 1.0].
-        Formula: weighted combination of 5 sub-metrics.
-        """
+        """Deterministic grader — produces score in [0.0, 1.0]."""
         n = self.n
         weights = self.cfg["score_weights"]
 
-        # 1. Survival rate: (initial - casualties) / initial
-        survival_rate = max(0.0, (self.total_initial_pop - self.casualties)) / max(1, self.total_initial_pop)
+        survival_rate = float(max(0.0, (self.total_initial_pop - self.casualties))) / float(max(1, self.total_initial_pop))
 
-        # 2. Evacuation efficiency: fraction evacuated × time efficiency
-        evac_fraction = self.evacuated / max(1, self.total_initial_pop)
-        time_bonus = 1.0 - (self.current_step / self.max_steps) * 0.5
+        evac_fraction = float(self.evacuated) / float(max(1, self.total_initial_pop))
+        time_bonus = 1.0 - (float(self.current_step) / float(self.max_steps)) * 0.5
         evacuation_efficiency = min(1.0, evac_fraction * time_bonus)
 
-        # 3. Shelter balance: low variance in utilization ratios
         shelter_balance = self._shelter_balance_score()
 
-        # 4. Congestion score: (1 - mean congestion)
         congestion_score = max(0.0, 1.0 - float(self.congestion_levels.mean()))
 
-        # 5. Safety score: fraction NOT in high-risk zones
-        high_risk_pop = sum(
+        high_risk_pop = int(sum(
             self.population_grid[i][j]
             for i in range(n)
             for j in range(n)
             if self.hazard_grid[i][j] > 0.5
-        )
-        safety_score = max(0.0, 1.0 - high_risk_pop / max(1, self.total_initial_pop))
+        ))
+        safety_score = max(0.0, 1.0 - float(high_risk_pop) / float(max(1, self.total_initial_pop)))
 
         final = (
-            weights["survival"] * survival_rate
-            + weights["evacuation_efficiency"] * evacuation_efficiency
-            + weights["shelter_balance"] * shelter_balance
-            + weights["congestion"] * congestion_score
-            + weights["safety"] * safety_score
+            float(weights["survival"]) * survival_rate
+            + float(weights["evacuation_efficiency"]) * evacuation_efficiency
+            + float(weights["shelter_balance"]) * shelter_balance
+            + float(weights["congestion"]) * congestion_score
+            + float(weights["safety"]) * safety_score
         )
         final = float(min(1.0, max(0.0, final)))
 
         return {
-            "score": final,
+            "score": round(final, 4),
             "survival_rate": round(survival_rate, 4),
             "evacuation_efficiency": round(evacuation_efficiency, 4),
             "shelter_balance": round(shelter_balance, 4),
@@ -277,7 +281,7 @@ class ADEMEnvironment:
         casualties_step = 0
 
         for zone_key, direction in zone_directions.items():
-            direction = direction.upper()
+            direction = direction.upper().strip()
             if direction not in self.DIRECTIONS:
                 continue
             try:
@@ -287,57 +291,52 @@ class ADEMEnvironment:
             if not self._in_bounds(zx, zy):
                 continue
 
-            pop = self.population_grid[zx][zy]
-            vuln = self.vulnerable_pop[zx][zy]
+            pop = int(self.population_grid[zx][zy])
+            vuln = int(self.vulnerable_pop[zx][zy])
             if pop == 0:
                 continue
             if direction == "STAY":
                 continue
 
-            # Panic reduces compliance (hard task)
-            panic = self.panic_levels[zx][zy]
+            panic = float(self.panic_levels[zx][zy])
             compliance = 1.0 - panic * 0.65
             moving_pop = max(1, int(pop * compliance))
-            # Movement is partial per step (realistic crowd speed)
             moving_pop = min(moving_pop, max(1, pop // 2))
             moving_vuln = min(vuln, moving_pop // 5)
 
             ddx, ddy = self.DIRECTIONS[direction]
             nx, ny = zx + ddx, zy + ddy
 
-            # Can't move into hazard-saturated or out-of-bounds cell
             if not self._in_bounds(nx, ny):
                 continue
-            if self.road_blockages[nx][ny] == 1:
+            if int(self.road_blockages[nx][ny]) == 1:
                 continue
 
-            # Check if destination is a shelter
             shelter_id = self._shelter_at(nx, ny)
             if shelter_id is not None:
-                cap = self.shelter_capacities[shelter_id]
-                cur = self.shelter_populations[shelter_id]
+                cap = int(self.shelter_capacities[shelter_id])
+                cur = int(self.shelter_populations[shelter_id])
                 space = max(0, cap - cur)
                 accepted = min(moving_pop, space)
                 if accepted > 0:
-                    self.shelter_populations[shelter_id] += accepted
+                    self.shelter_populations[shelter_id] = cur + accepted
                     new_pop[zx][zy] -= accepted
                     new_vuln[zx][zy] -= min(moving_vuln, accepted // 5 + 1)
                     self.evacuated += accepted
                     evacuated_step += accepted
             else:
-                # Regular move toward shelter
                 new_pop[zx][zy] -= moving_pop
                 new_pop[nx][ny] += moving_pop
                 new_vuln[zx][zy] -= moving_vuln
                 new_vuln[nx][ny] += moving_vuln
 
-        self.population_grid = np.clip(new_pop, 0, None)
-        self.vulnerable_pop = np.clip(new_vuln, 0, None)
-        return evacuated_step, casualties_step
+        self.population_grid = np.clip(new_pop, 0, None).astype(np.int32)
+        self.vulnerable_pop = np.clip(new_vuln, 0, None).astype(np.int32)
+        return int(evacuated_step), int(casualties_step)
 
     def _spread_hazard(self):
-        """Spread hazard to adjacent cells (fire/flood dynamics)."""
-        spread_rate = self.cfg.get("hazard_spread_rate", 0.0)
+        """Spread hazard to adjacent cells."""
+        spread_rate = float(self.cfg.get("hazard_spread_rate", 0.0))
         if spread_rate == 0.0:
             return
         n = self.n
@@ -348,9 +347,8 @@ class ADEMEnvironment:
                     for di, dj in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                         ni, nj = i + di, j + dj
                         if self._in_bounds(ni, nj):
-                            increment = self.hazard_grid[i][j] * spread_rate
-                            new_hazard[ni][nj] = min(1.0, new_hazard[ni][nj] + increment)
-                    # Very intense hazard blocks adjacent roads
+                            increment = float(self.hazard_grid[i][j]) * spread_rate
+                            new_hazard[ni][nj] = min(1.0, float(new_hazard[ni][nj]) + increment)
                     if self.hazard_grid[i][j] > 0.85:
                         self.road_blockages[i][j] = 1
         self.hazard_grid = new_hazard
@@ -361,23 +359,22 @@ class ADEMEnvironment:
         step_casualties = 0
         for i in range(n):
             for j in range(n):
-                pop = self.population_grid[i][j]
-                hz = self.hazard_grid[i][j]
+                pop = int(self.population_grid[i][j])
+                hz = float(self.hazard_grid[i][j])
                 if hz > 0.65 and pop > 0:
-                    # Casualty probability proportional to hazard intensity
                     cas = max(1, int(pop * (hz - 0.5) * 0.12))
                     cas = min(cas, pop)
-                    self.population_grid[i][j] -= cas
-                    self.vulnerable_pop[i][j] = max(0, self.vulnerable_pop[i][j] - cas // 5)
+                    self.population_grid[i][j] = int(self.population_grid[i][j]) - cas
+                    self.vulnerable_pop[i][j] = max(0, int(self.vulnerable_pop[i][j]) - cas // 5)
                     self.casualties += cas
                     step_casualties += cas
-        return step_casualties
+        return int(step_casualties)
 
     def _update_congestion(self):
         """Recompute congestion from population density."""
-        max_density = 30  # people per cell = full congestion
+        max_density = 30.0
         self.congestion_levels = np.clip(
-            self.population_grid.astype(float) / max_density, 0.0, 1.0
+            self.population_grid.astype(np.float64) / max_density, 0.0, 1.0
         )
 
     def _update_panic(self):
@@ -386,37 +383,33 @@ class ADEMEnvironment:
         for i in range(n):
             for j in range(n):
                 if self.population_grid[i][j] > 0:
-                    hz_influence = self.hazard_grid[i][j] * 0.25
-                    cong_influence = self.congestion_levels[i][j] * 0.15
+                    hz_influence = float(self.hazard_grid[i][j]) * 0.25
+                    cong_influence = float(self.congestion_levels[i][j]) * 0.15
                     self.panic_levels[i][j] = min(
-                        1.0, self.panic_levels[i][j] + hz_influence + cong_influence
+                        1.0, float(self.panic_levels[i][j]) + hz_influence + cong_influence
                     )
 
     def _compute_step_reward(self, evacuated_step: int, casualties_step: int) -> float:
         """Dense per-step reward signal."""
         n = self.n
 
-        evac_reward = 0.05 * evacuated_step
+        evac_reward = 0.05 * float(evacuated_step)
 
-        # Vulnerable people saved bonus (approximate from evacuated ratio)
-        total_vuln_saved = sum(
-            self.shelter_populations[sid]
-            for sid in self.shelter_populations
-        )
-        vuln_reward = 0.02 * (total_vuln_saved / max(1, self.total_initial_pop)) * self.n
+        total_vuln_saved = float(sum(self.shelter_populations.values()))
+        vuln_reward = 0.02 * (total_vuln_saved / float(max(1, self.total_initial_pop))) * float(self.n)
 
-        cas_penalty = -0.08 * casualties_step
+        cas_penalty = -0.08 * float(casualties_step)
 
         avg_congestion = float(self.congestion_levels.mean())
-        cong_penalty = -0.03 * avg_congestion * 10
+        cong_penalty = -0.03 * avg_congestion * 10.0
 
-        high_risk_pop = sum(
-            self.population_grid[i][j]
+        high_risk_pop = float(sum(
+            int(self.population_grid[i][j])
             for i in range(n)
             for j in range(n)
             if self.hazard_grid[i][j] > 0.5
-        )
-        risk_penalty = -0.04 * (high_risk_pop / max(1, self.total_initial_pop)) * 10
+        ))
+        risk_penalty = -0.04 * (high_risk_pop / float(max(1, self.total_initial_pop))) * 10.0
 
         shelter_bal = 0.01 * self._shelter_balance_score()
 
@@ -427,14 +420,14 @@ class ADEMEnvironment:
         if not self.shelter_populations:
             return 0.0
         utils = [
-            self.shelter_populations[sid] / max(1, self.shelter_capacities[sid])
+            float(self.shelter_populations[sid]) / float(max(1, self.shelter_capacities[sid]))
             for sid in self.shelter_populations
         ]
         if len(utils) < 2:
             return 1.0
         avg = sum(utils) / len(utils)
         variance = sum((u - avg) ** 2 for u in utils) / len(utils)
-        return float(max(0.0, 1.0 - variance * 5))
+        return float(max(0.0, 1.0 - variance * 5.0))
 
     def _shelter_at(self, row: int, col: int) -> Optional[str]:
         for sid, pos in self.shelter_positions.items():
@@ -451,19 +444,20 @@ class ADEMEnvironment:
         return int(parts[0].strip()), int(parts[1].strip())
 
     def _build_observation(self) -> ADEMObservation:
+        """Build observation with all types explicitly cast to Python natives."""
         return ADEMObservation(
-            population_grid=self.population_grid.tolist(),
-            hazard_grid=[[round(v, 3) for v in row] for row in self.hazard_grid.tolist()],
-            road_blockages=self.road_blockages.tolist(),
-            shelter_capacities=dict(self.shelter_capacities),
-            shelter_populations=dict(self.shelter_populations),
-            congestion_levels=[[round(v, 3) for v in row] for row in self.congestion_levels.tolist()],
-            panic_levels=[[round(v, 3) for v in row] for row in self.panic_levels.tolist()],
-            vulnerable_population_map=self.vulnerable_pop.tolist(),
-            available_resources=dict(self.available_resources),
-            time_remaining=self.max_steps - self.current_step,
-            total_population=self.total_initial_pop,
-            evacuated=self.evacuated,
-            casualties=self.casualties,
-            grid_size=self.n,
+            population_grid=_grid_to_int_list(self.population_grid),
+            hazard_grid=_grid_to_float_list(self.hazard_grid),
+            road_blockages=_grid_to_int_list(self.road_blockages),
+            shelter_capacities={k: int(v) for k, v in self.shelter_capacities.items()},
+            shelter_populations={k: int(v) for k, v in self.shelter_populations.items()},
+            congestion_levels=_grid_to_float_list(self.congestion_levels),
+            panic_levels=_grid_to_float_list(self.panic_levels),
+            vulnerable_population_map=_grid_to_int_list(self.vulnerable_pop),
+            available_resources={k: int(v) for k, v in self.available_resources.items()},
+            time_remaining=int(self.max_steps - self.current_step),
+            total_population=int(self.total_initial_pop),
+            evacuated=int(self.evacuated),
+            casualties=int(self.casualties),
+            grid_size=int(self.n),
         )
