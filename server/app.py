@@ -1,6 +1,6 @@
 """
 ADEM OpenEnv Server — FastAPI application.
-Runs via: uvicorn server:app --host 0.0.0.0 --port 8000
+Runs via: uvicorn server.app:app --host 0.0.0.0 --port 8000
 Or via:   uv run server
 """
 from __future__ import annotations
@@ -28,13 +28,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Active environment instance (single-session server)
 _env: Optional[ADEMEnvironment] = None
 
-
-# ──────────────────────────────────────────────────────
-# Response schemas
-# ──────────────────────────────────────────────────────
 
 class StepResponse(BaseModel):
     observation: ADEMObservation
@@ -48,26 +43,22 @@ class ResetRequest(BaseModel):
     seed: Optional[int] = None
 
 
-# ──────────────────────────────────────────────────────
-# Endpoints
-# ──────────────────────────────────────────────────────
-
 @app.get("/health")
 def health():
-    """Health check endpoint."""
     return {"status": "ok", "env": "adem", "version": "1.0.0"}
 
 
 @app.get("/tasks")
 def list_tasks():
-    """List all available tasks."""
     return {
         "tasks": [
             {
                 "name": name,
-                "difficulty": ("easy" if name == "controlled_evacuation"
-                               else "medium" if name == "dynamic_hazard"
-                               else "hard"),
+                "difficulty": (
+                    "easy" if name == "controlled_evacuation"
+                    else "medium" if name == "dynamic_hazard"
+                    else "hard"
+                ),
                 "grid_size": cfg["grid_size"],
                 "max_steps": cfg["max_steps"],
             }
@@ -78,41 +69,48 @@ def list_tasks():
 
 @app.post("/reset", response_model=StepResponse)
 def reset(req: ResetRequest):
-    """Reset the environment for a given task. Returns first observation."""
     global _env
     if req.task not in TASKS:
-        raise HTTPException(400, f"Unknown task '{req.task}'. Valid: {list(TASKS.keys())}")
+        raise HTTPException(400, f"Unknown task '{req.task}'")
 
     _env = ADEMEnvironment(task=req.task, seed=req.seed)
     obs = _env.reset()
-    return StepResponse(observation=obs, reward=0.0, done=False, info={"message": "reset ok"})
+    return StepResponse(
+        observation=obs,
+        reward=0.0,
+        done=False,
+        info={"message": "reset ok"},
+    )
 
 
 @app.post("/step", response_model=StepResponse)
 def step(action: ADEMAction):
-    """Advance one timestep with the provided action."""
     global _env
     if _env is None:
         raise HTTPException(400, "Call /reset before /step")
+
     obs, reward, done, info = _env.step(action)
-    return StepResponse(observation=obs, reward=reward, done=done, info=info)
+    return StepResponse(
+        observation=obs,
+        reward=reward,
+        done=done,
+        info=info,
+    )
 
 
 @app.get("/state")
 def state():
-    """Return current episode state summary."""
     global _env
     if _env is None:
-        raise HTTPException(400, "No active environment. Call /reset first.")
+        raise HTTPException(400, "No active environment")
     return _env.state()
 
 
 @app.get("/score")
 def score():
-    """Compute final episode score (call after episode ends)."""
     global _env
     if _env is None:
-        raise HTTPException(400, "No active environment. Call /reset first.")
+        raise HTTPException(400, "No active environment")
     return ADEMGrader.grade(_env)
 
 
@@ -123,3 +121,12 @@ def root():
         "description": "Adaptive Disaster Evacuation Management RL Environment",
         "endpoints": ["/health", "/tasks", "/reset", "/step", "/state", "/score"],
     }
+
+
+def main():
+    import uvicorn
+    uvicorn.run("server.app:app", host="0.0.0.0", port=8000)
+
+
+if __name__ == "__main__":
+    main()
