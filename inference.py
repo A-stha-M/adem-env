@@ -328,11 +328,15 @@ async def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
     # Connect to environment
-    if ADEM_SERVER_URL:
-        print(f"[DEBUG] Connecting to existing server: {ADEM_SERVER_URL}", flush=True)
-        env = await ADEMEnv.from_server_url(ADEM_SERVER_URL)
-    else:
-        env = await ADEMEnv.from_docker_image(LOCAL_IMAGE_NAME)
+    try:
+        if ADEM_SERVER_URL:
+            print(f"[DEBUG] Connecting to existing server: {ADEM_SERVER_URL}", flush=True)
+            env = await ADEMEnv.from_server_url(ADEM_SERVER_URL)
+        else:
+            env = await ADEMEnv.from_docker_image(LOCAL_IMAGE_NAME)
+    except Exception as exc:
+        print(f"[DEBUG] Environment startup error: {exc}", flush=True)
+        return
 
     try:
         for task in TASKS_TO_RUN:
@@ -345,4 +349,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as exc:
+        print(f"[DEBUG] Fatal inference error: {exc}", flush=True)

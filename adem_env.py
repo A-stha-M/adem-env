@@ -51,7 +51,7 @@ class ADEMEnv:
       3. from_server_url(url)          — connects to existing server (HF Space)
     """
 
-    _DEFAULT_PORT = 8000
+    _DEFAULT_PORT = int(os.getenv("ADEM_PORT", "7860"))
     _HEALTH_RETRIES = 40
     _HEALTH_INTERVAL = 1.5  # seconds
 
@@ -80,17 +80,49 @@ class ADEMEnv:
 
         if image_name:
             print(f"[DEBUG] Starting Docker container: {image_name}", flush=True)
-            result = subprocess.run(
-                ["docker", "run", "-d", "-p", f"{port}:8000", image_name],
-                capture_output=True,
-                text=True,
+            # Try current container port first, then legacy one for compatibility.
+            last_err: Optional[Exception] = None
+            for container_port in (7860, 8000):
+                result = subprocess.run(
+                    ["docker", "run", "-d", "-p", f"{port}:{container_port}", image_name],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    last_err = RuntimeError(f"docker run failed: {result.stderr}")
+                    continue
+
+                container_id = result.stdout.strip()
+                print(
+                    f"[DEBUG] Container started: {container_id[:12]} (container port {container_port})",
+                    flush=True,
+                )
+
+                base_url = f"http://localhost:{port}"
+                instance = cls(base_url=base_url, _proc=proc, _container_id=container_id)
+                try:
+                    await instance._wait_for_health()
+                    return instance
+                except Exception as exc:
+                    last_err = exc
+                    subprocess.run(
+                        ["docker", "stop", container_id],
+                        capture_output=True,
+                        timeout=15,
+                    )
+                    container_id = None
+
+            raise RuntimeError(f"Failed to start healthy Docker env: {last_err}")
+
+        print("[DEBUG] Starting local server subprocess", flush=True)
+        try:
+            proc = subprocess.Popen(
+                ["python", "-m", "server.app"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
-            if result.returncode != 0:
-                raise RuntimeError(f"docker run failed: {result.stderr}")
-            container_id = result.stdout.strip()
-            print(f"[DEBUG] Container started: {container_id[:12]}", flush=True)
-        else:
-            print("[DEBUG] Starting local server subprocess", flush=True)
+        except Exception:
+            # Legacy fallback for older layout.
             proc = subprocess.Popen(
                 ["python", "server.py"],
                 stdout=subprocess.DEVNULL,
