@@ -1,0 +1,76 @@
+name: adem-env
+version: "1.0.0"
+description: >
+  Adaptive Disaster Evacuation Management (ADEM) — an RL environment where
+  an AI agent acts as a central disaster command system. It dynamically routes
+  populations, allocates shelters, controls traffic flow, and responds to
+  spreading hazards to minimize casualties under uncertainty.
+author: "your-hf-username"
+license: MIT
+tags:
+  - emergency-management
+  - multi-objective-rl
+  - real-world
+  - disaster-response
+  - crowd-dynamics
+
+tasks:
+  - name: controlled_evacuation
+    description: >
+      Small 6x6 grid city, single static hazard, low population (50 people),
+      2 shelters. Agent learns basic routing and shelter allocation.
+    difficulty: easy
+    max_steps: 15
+
+  - name: dynamic_hazard
+    description: >
+      8x8 city, hazard spreads over time blocking roads dynamically,
+      multiple population clusters (120 people), 3 shelters.
+      Agent must continuously re-route evacuees.
+    difficulty: medium
+    max_steps: 20
+
+  - name: panic_evacuation
+    description: >
+      10x10 city, 2 simultaneous hazard sources, 230+ people with panic
+      dynamics (population partially ignores instructions), vulnerable groups,
+      limited shelter capacity. Tests advanced crowd management and prioritization.
+    difficulty: hard
+    max_steps: 25
+
+observation_space:
+  type: object
+  properties:
+    population_grid: {type: array, description: "NxN grid of people per cell"}
+    hazard_grid: {type: array, description: "NxN grid of hazard intensity 0.0-1.0"}
+    road_blockages: {type: array, description: "NxN grid, 1=blocked 0=open"}
+    shelter_capacities: {type: object, description: "shelter_id -> max capacity"}
+    shelter_populations: {type: object, description: "shelter_id -> current count"}
+    congestion_levels: {type: array, description: "NxN grid 0.0-1.0"}
+    panic_levels: {type: array, description: "NxN grid 0.0-1.0"}
+    vulnerable_population_map: {type: array, description: "NxN grid of vulnerable people"}
+    available_resources: {type: object, description: "resource_type -> count"}
+    time_remaining: {type: integer}
+    total_population: {type: integer}
+    evacuated: {type: integer}
+    casualties: {type: integer}
+    grid_size: {type: integer}
+
+action_space:
+  type: object
+  properties:
+    zone_directions:
+      type: object
+      description: "Map of 'row,col' -> direction (N/S/E/W/STAY) for each zone"
+    road_controls:
+      type: object
+      description: "Map of 'row,col' -> bool (true=open, false=close)"
+    resource_allocations:
+      type: object
+      description: "Map of shelter_id -> extra resource units to allocate"
+    deploy_drone:
+      type: string
+      description: "Zone 'row,col' to deploy guidance drone (reduces panic)"
+
+endpoint: http://localhost:8000
+health_check: /health
