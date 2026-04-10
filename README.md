@@ -1,3 +1,12 @@
+---
+title: Adem Env
+emoji: 👀
+colorFrom: indigo
+colorTo: yellow
+sdk: docker
+pinned: false
+---
+
 # 🚨 ADEM — Adaptive Disaster Evacuation Management
 
 An OpenEnv-compliant reinforcement learning environment where an AI agent acts as a central disaster command system, dynamically routing civilians to safety during spreading hazards.
