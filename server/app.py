@@ -68,8 +68,9 @@ def list_tasks():
 
 
 @app.post("/reset", response_model=StepResponse)
-def reset(req: ResetRequest):
+def reset(req: Optional[ResetRequest] = None):
     global _env
+    req = req or ResetRequest()
     if req.task not in TASKS:
         raise HTTPException(400, f"Unknown task '{req.task}'")
 
