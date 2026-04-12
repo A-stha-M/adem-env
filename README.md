@@ -23,8 +23,9 @@ pinned: false
 - **Triple simultaneous hazard** (`multi_hazard_city`) — frontier-model challenge with 3 concurrent disaster sources
 - **Dense multi-component reward** — 6 reward signals per step, never sparse
 - **Deterministic grading** — seeded RNG, no LLM judges, fully reproducible
+- **History-aware baseline agent** — `inference.py` uses multi-turn conversation history so decisions build on prior observations/actions
 
-## Why This Environment Is Hard
+## Why This Environment Is Challenging
 
 - Civilians only partially comply under panic (compliance scales inversely with panic level)
 - Roads block dynamically mid-episode (aftershocks, storm surge, fire spread)
@@ -38,6 +39,14 @@ pinned: false
 Large-scale evacuations are still managed with **static, pre-planned routes** that assume roads stay open, hazards evolve slowly, and people follow instructions. In reality: roads block dynamically, panic causes crowd movement to defy instructions, shelters overcrowd unevenly, and hazards spread non-linearly.
 
 **ADEM fills a clear gap** — no standardized RL benchmark exists for adaptive evacuation under dynamic hazards, crowd panic, and multi-objective tradeoffs.
+
+This also reflects a task real human responders perform in emergency operations centers: they continuously re-route people based on evolving hazards, road closures, congestion, and shelter capacity while minimizing casualties under time pressure.
+
+In practice, this maps to real roles and workflows:
+- Incident commanders prioritize neighborhoods for evacuation waves.
+- Transportation/control teams open, close, and re-route road corridors.
+- Shelter coordinators rebalance inflow as capacities change.
+- Field teams adapt plans after aftershocks, flooding, and communication delays.
 
 **Potential users:**
 - Emergency management agencies testing AI decision support systems
@@ -56,7 +65,7 @@ Grid orientation (6×6 example — controlled_evacuation):
  col→  0    1    2    3    4    5
 row 0 [🔥] [ P] [ P] [  ] [ P] [  ]
 row 1 [  ] [ P] [ P] [  ] [ P] [  ]
-row 2 [  ] [ P] [ P] [  ] [  ] [  ]
+row 2 [  ] [ P] [ P] [ ■] [  ] [  ]
 row 3 [  ] [  ] [  ] [  ] [  ] [  ]
 row 4 [  ] [  ] [  ] [  ] [ P] [  ]
 row 5 [  ] [  ] [S1] [  ] [  ] [S2]
@@ -86,15 +95,15 @@ Agent can use road_controls to clear blocked roads (dispatch crews).
 
 | Task | Difficulty | Grid | Steps | Civilians | Hazards | Novel Mechanic |
 |------|:---:|:---:|:---:|:---:|:---:|---|
-| `controlled_evacuation` | 🟢 Easy | 6×6 | 15 | ~48 | 1 static | Baseline routing |
-| `flash_flood` | 🟢 Easy | 6×6 | 15 | 64 | Rising water | South-biased spread |
-| `building_fire` | 🟢 Easy | 7×7 | 15 | 85 | 1 wind-driven | East wind acceleration |
-| `dynamic_hazard` | 🟡 Medium | 8×8 | 20 | ~130 | 1 spreading | Continuous re-routing |
-| `earthquake_response` | 🟡 Medium | 8×8 | 20 | 125 | 2 + aftershocks | Pre-blocked + dynamic roads |
-| `industrial_chemical` | 🟡 Medium | 9×9 | 20 | 165 | East-drifting plume | Race the plume eastward |
-| `panic_evacuation` | 🔴 Hard | 10×10 | 25 | ~230 | 2 simultaneous | Panic compliance model |
-| `hurricane_coastal` | 🔴 Hard | 10×10 | 25 | 238 | 3 + storm surge | Pre-flooded + intensifying |
-| `multi_hazard_city` | 🔴 Hard | 10×10 | 30 | ~315 | 3 simultaneous | Triple-threat frontier test |
+| `controlled_evacuation` | Easy | 6×6 | 15 | ~48 | 1 static | Baseline routing |
+| `flash_flood` | Easy | 6×6 | 15 | 64 | Rising water | South-biased spread |
+| `building_fire` | Easy | 7×7 | 15 | 85 | 1 wind-driven | East wind acceleration |
+| `dynamic_hazard` | Medium | 8×8 | 20 | ~130 | 1 spreading | Continuous re-routing |
+| `earthquake_response` | Medium | 8×8 | 20 | 125 | 2 + aftershocks | Pre-blocked + dynamic roads |
+| `industrial_chemical` | Medium | 9×9 | 20 | 165 | East-drifting plume | Race the plume eastward |
+| `panic_evacuation` | Hard | 10×10 | 25 | ~230 | 2 simultaneous | Panic compliance model |
+| `hurricane_coastal` | Hard | 10×10 | 25 | 238 | 3 + storm surge | Pre-flooded + intensifying |
+| `multi_hazard_city` | Hard | 10×10 | 30 | ~315 | 3 simultaneous | Triple-threat frontier test |
 
 ### Task Descriptions
 
@@ -164,7 +173,7 @@ adem-env/
 │   └── grader.py              # Final score + task bonus rules
 │
 └── server/
-  └── app.py                 # FastAPI API: /health, /tasks, /reset, /step, /state, /score
+    └── app.py                 # FastAPI API: /health, /tasks, /reset, /step, /state, /score
 ```
 
 ---
@@ -288,6 +297,13 @@ set MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
 python inference.py
 ```
 
+### Baseline Inference Design
+
+- Uses the OpenAI Python client (`from openai import OpenAI`) against OpenAI-compatible endpoints.
+- Maintains multi-turn history (`MAX_HISTORY_TURNS`) so each action is conditioned on recent trajectory context.
+- Emits reproducible structured logs (`[START]`, `[STEP]`, `[END]`) for task-level scoring and auditability.
+- Supports strict benchmark mode (`STRICT_BASELINE=1`) to fail fast on auth/model/parse errors and prevent silent heuristic-only scores.
+
 ## Docker
 
 ```bash
@@ -310,18 +326,53 @@ docker stop adem && docker rm adem
 
 Baselines run with `ADEM_SERVER_URL` pointed at the deployed HF Space.
 
+Important integrity note:
+- The table below is **provisional** because prior runs hit model-auth errors and fell back to heuristics.
+- For submission-grade model comparison, regenerate with strict mode (`STRICT_BASELINE=1`) and valid model credentials.
+
 | Task | Difficulty | Qwen2.5-72B | Llama-3.3-70B | Qwen2.5-7B |
 |------|:---:|:---:|:---:|:---:|
-| `controlled_evacuation` | 🟢 | 0.850 | 0.850 | 0.850 |
-| `flash_flood` | 🟢 | 0.479 | 0.479 | 0.479 |
-| `building_fire` | 🟢 | 0.798 | 0.798 | 0.798 |
-| `dynamic_hazard` | 🟡 | 0.855 | 0.855 | 0.855 |
-| `earthquake_response` | 🟡 | 0.833 | 0.833 | 0.833 |
-| `industrial_chemical` | 🟡 | 0.831 | 0.831 | 0.831 |
-| `panic_evacuation` | 🔴 | 0.770 | 0.770 | 0.770 |
-| `hurricane_coastal` | 🔴 | 0.669 | 0.669 | 0.669 |
-| `multi_hazard_city` | 🔴 | 0.879 | 0.879 | 0.879 |
+| `controlled_evacuation` | Easy | 0.850 | 0.850 | 0.850 |
+| `flash_flood` | Easy | 0.479 | 0.479 | 0.479 |
+| `building_fire` | Easy | 0.798 | 0.798 | 0.798 |
+| `dynamic_hazard` | Medium | 0.855 | 0.855 | 0.855 |
+| `earthquake_response` | Medium | 0.833 | 0.833 | 0.833 |
+| `industrial_chemical` | Medium | 0.831 | 0.831 | 0.831 |
+| `panic_evacuation` | Hard | 0.770 | 0.770 | 0.770 |
+| `hurricane_coastal` | Hard | 0.669 | 0.669 | 0.669 |
+| `multi_hazard_city` | Hard | 0.879 | 0.879 | 0.879 |
 | **Average** | | **0.774** | **0.774** | **0.774** |
+
+### Trusted Baseline Protocol (For Final Submission)
+
+Run with strict mode so authentication/model errors cannot produce fallback-based scores:
+
+```bat
+set ADEM_SERVER_URL=https://astha28-adem-env.hf.space
+set API_BASE_URL=https://router.huggingface.co/v1
+set OPENAI_API_KEY=<your_valid_model_api_key>
+set STRICT_BASELINE=1
+set ALLOW_HEURISTIC_FALLBACK=0
+set PRECHECK_MODEL_ACCESS=1
+```
+
+Then run per model:
+
+```bat
+set MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+python inference.py 2>&1 | findstr "[END]"
+
+set MODEL_NAME=meta-llama/Llama-3.3-70B-Instruct
+python inference.py 2>&1 | findstr "[END]"
+
+set MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+python inference.py 2>&1 | findstr "[END]"
+```
+
+Accept runs only if:
+- No `llm_error:` appears in `[STEP]` lines.
+- No auth/model-access failures appear in `[DEBUG]` lines.
+- Each model yields a complete 9-task `[END]` set.
 
 ---
 
@@ -329,9 +380,11 @@ Baselines run with `ADEM_SERVER_URL` pointed at the deployed HF Space.
 
 | Variable | Description | Default |
 |---|---|---|
+| `OPENAI_API_KEY` | OpenAI-compatible API key (preferred by baseline script) | Not set |
 | `API_BASE_URL` | LLM API endpoint | `https://router.huggingface.co/v1` |
 | `MODEL_NAME` | Model identifier | `Qwen/Qwen2.5-72B-Instruct` |
-| `HF_TOKEN` | HuggingFace API key | Required |
+| `HF_TOKEN` | HuggingFace token (supported fallback key) | Not set |
+| `API_KEY` | Generic API key fallback | Not set |
 | `ADEM_SERVER_URL` | Connect to existing server (overrides Docker) | Not set |
 | `LOCAL_IMAGE_NAME` | Local Docker image name | Not set |
 | `ADEM_PORT` | Server port | `7860` |
@@ -350,3 +403,15 @@ Baselines run with `ADEM_SERVER_URL` pointed at the deployed HF Space.
 - ✅ Fully deterministic given same seed
 - ✅ Working Dockerfile for containerized execution
 - ✅ Baseline `inference.py` with mandatory `[START]`/`[STEP]`/`[END]` log format
+
+## Competition Readiness Checklist
+
+- ✅ Real-world task simulation: adaptive emergency evacuation mirrors real incident command workflows.
+- ✅ OpenEnv spec: typed models + `step()`/`reset()`/`state()` + `openenv.yaml`.
+- ✅ Task ladder: 9 tasks with clear difficulty progression (easy → medium → hard).
+- ✅ Agent grading: deterministic score outputs in `[0.0, 1.0]`.
+- ✅ Meaningful rewards: dense trajectory-level signals for progress, plus penalties for harmful outcomes.
+- ✅ Baseline script: OpenAI client, environment-variable credentials, reproducible structured scoring logs.
+- ✅ Baseline integrity controls: strict mode + precheck to prevent fallback-only benchmark reporting.
+- ✅ Deployment: working Dockerfile and HF Space deployment.
+- ✅ README completeness: environment overview, action/observation spaces, setup, Docker, and baseline scores.

@@ -9,7 +9,14 @@ and their outcomes — significantly improving sequential decision-making.
 Environment variables:
     API_BASE_URL        LLM endpoint (default: HuggingFace router)
     MODEL_NAME          LLM model identifier
+    OPENAI_API_KEY      OpenAI-compatible API key (preferred)
     HF_TOKEN            HuggingFace / API key
+    API_KEY             Generic API key fallback
+    STRICT_BASELINE     If true, abort on any LLM call/parse error (default: true)
+    ALLOW_HEURISTIC_FALLBACK
+                        If true, use heuristic fallback on LLM failure (default: false when strict)
+    PRECHECK_MODEL_ACCESS
+                        If true, run a tiny preflight model call before evaluation (default: true when strict)
     LOCAL_IMAGE_NAME    Docker image name (optional)
     ADEM_SERVER_URL     Connect to existing server URL (overrides docker startup)
 
@@ -33,7 +40,12 @@ from adem_env import ADEMAction, ADEMEnv, ADEMObservation
 LOCAL_IMAGE_NAME: Optional[str] = os.getenv("LOCAL_IMAGE_NAME")
 ADEM_SERVER_URL: Optional[str] = os.getenv("ADEM_SERVER_URL")
 
-API_KEY: str = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or "hf_placeholder"
+API_KEY: str = (
+    os.getenv("OPENAI_API_KEY")
+    or os.getenv("HF_TOKEN")
+    or os.getenv("API_KEY")
+    or "hf_placeholder"
+)
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 BENCHMARK: str = "adem"
@@ -55,6 +67,18 @@ TEMPERATURE: float = 0.15     # Low temperature for more deterministic routing
 MAX_TOKENS: int = 600
 SUCCESS_SCORE_THRESHOLD: float = 0.30
 MAX_HISTORY_TURNS: int = 4    # Multi-turn: keep last N (obs, action) pairs in context
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() not in {"0", "false", "no", "off"}
+
+
+STRICT_BASELINE: bool = _env_flag("STRICT_BASELINE", True)
+ALLOW_HEURISTIC_FALLBACK: bool = _env_flag("ALLOW_HEURISTIC_FALLBACK", not STRICT_BASELINE)
+PRECHECK_MODEL_ACCESS: bool = _env_flag("PRECHECK_MODEL_ACCESS", STRICT_BASELINE)
 
 # ── Mandatory Logging Format ───────────────────────────────────────────────────
 
@@ -229,7 +253,9 @@ def call_llm(
     """
     Call LLM with multi-turn conversation history.
     The LLM sees its past observations AND past actions, enabling trajectory-aware planning.
-    Falls back to heuristic on parse failure.
+
+    In strict baseline mode, any LLM API or parse failure raises an exception
+    to prevent accidental heuristic-only scores.
     """
     shelter_hint = get_shelter_hint(task)
     task_hint = get_task_hint(task)
@@ -263,7 +289,14 @@ def call_llm(
             max_tokens=MAX_TOKENS,
         )
         raw = (completion.choices[0].message.content or "").strip()
+    except Exception as exc:
+        msg = f"LLM API call failed at step={step}: {exc}"
+        if STRICT_BASELINE and not ALLOW_HEURISTIC_FALLBACK:
+            raise RuntimeError(msg) from exc
+        print(f"[DEBUG] {msg}", flush=True)
+        return _heuristic_action(obs, task)
 
+    try:
         # Strip markdown fences if present
         if "```" in raw:
             parts = raw.split("```")
@@ -293,9 +326,11 @@ def call_llm(
         }
         parsed["zone_directions"] = zone_dirs
         return ADEMAction(**parsed)
-
     except Exception as exc:
-        print(f"[DEBUG] LLM parse error step={step}: {exc}", flush=True)
+        msg = f"LLM parse error step={step}: {exc}"
+        if STRICT_BASELINE and not ALLOW_HEURISTIC_FALLBACK:
+            raise RuntimeError(msg) from exc
+        print(f"[DEBUG] {msg}", flush=True)
         return _heuristic_action(obs, task)
 
 
@@ -395,6 +430,7 @@ async def run_episode(env: ADEMEnv, client: OpenAI, task: str) -> None:
     steps_taken: int = 0
     score: float = 0.0
     success: bool = False
+    aborted_for_llm_error: bool = False
 
     # Multi-turn conversation history: list of {role, content} dicts
     # Alternates: user (observation) → assistant (action JSON) → user → ...
@@ -411,8 +447,21 @@ async def run_episode(env: ADEMEnv, client: OpenAI, task: str) -> None:
                 break
 
             # Get action from LLM (with multi-turn history)
-            action = call_llm(client, obs, step, task, conversation_history)
-            action_str = json.dumps(action.model_dump())
+            try:
+                action = call_llm(client, obs, step, task, conversation_history)
+                action_str = json.dumps(action.model_dump())
+            except Exception as exc:
+                aborted_for_llm_error = True
+                steps_taken = step
+                rewards.append(0.0)
+                log_step(
+                    step=step,
+                    action="{}",
+                    reward=0.0,
+                    done=True,
+                    error=f"llm_error:{str(exc)[:70]}",
+                )
+                break
 
             # Step the environment
             error_msg: Optional[str] = None
@@ -446,17 +495,21 @@ async def run_episode(env: ADEMEnv, client: OpenAI, task: str) -> None:
                 break
 
         # Fetch final graded score
-        try:
-            score_data = await env.score()
-            score = float(score_data.get("score", 0.0))
-        except Exception as exc:
-            print(f"[DEBUG] score fetch error: {exc}", flush=True)
-            # Fallback: estimate from step rewards
-            total_r = sum(rewards)
-            score = min(1.0, max(0.0, 0.3 + total_r * 0.05))
+        if aborted_for_llm_error and STRICT_BASELINE and not ALLOW_HEURISTIC_FALLBACK:
+            score = 0.0
+            success = False
+        else:
+            try:
+                score_data = await env.score()
+                score = float(score_data.get("score", 0.0))
+            except Exception as exc:
+                print(f"[DEBUG] score fetch error: {exc}", flush=True)
+                # Fallback: estimate from step rewards
+                total_r = sum(rewards)
+                score = min(1.0, max(0.0, 0.3 + total_r * 0.05))
 
-        score = float(min(1.0, max(0.0, score)))
-        success = score >= SUCCESS_SCORE_THRESHOLD
+            score = float(min(1.0, max(0.0, score)))
+            success = score >= SUCCESS_SCORE_THRESHOLD
 
     except Exception as exc:
         print(f"[DEBUG] Episode error (task={task}): {exc}", flush=True)
@@ -469,6 +522,34 @@ async def run_episode(env: ADEMEnv, client: OpenAI, task: str) -> None:
 
 async def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+
+    print(
+        f"[DEBUG] strict_baseline={STRICT_BASELINE} "
+        f"allow_heuristic_fallback={ALLOW_HEURISTIC_FALLBACK} "
+        f"precheck_model_access={PRECHECK_MODEL_ACCESS}",
+        flush=True,
+    )
+
+    if STRICT_BASELINE and API_KEY == "hf_placeholder":
+        raise RuntimeError(
+            "STRICT_BASELINE is enabled but no API key was found. "
+            "Set OPENAI_API_KEY (preferred) or HF_TOKEN/API_KEY."
+        )
+
+    if PRECHECK_MODEL_ACCESS:
+        try:
+            _ = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[{"role": "user", "content": "Reply with OK"}],
+                temperature=0.0,
+                max_tokens=4,
+            )
+            print("[DEBUG] Model access precheck passed", flush=True)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Model access precheck failed for model='{MODEL_NAME}'. "
+                f"Fix credentials/model permissions before running baselines. Details: {exc}"
+            ) from exc
 
     # Connect to environment server
     try:
