@@ -116,6 +116,57 @@ Agent can use road_controls to clear blocked roads (dispatch crews).
 
 **Hard: Multi-Hazard City** — Three simultaneous disasters: wildfire (NW), flood (SE), chemical (NE). 315+ civilians across all quadrants. Central junction pre-blocked (6 roads). Ongoing instability (15%/step). Each population cluster must escape in a different direction. No single routing strategy works — the agent must reason about each quadrant independently.
 
+## Adding New Tasks
+
+To add a new task:
+
+1. Create a new file in `tasks/` (for example, `tasks/medium_my_new_task.py`).
+2. Define a top-level `TASK = {...}` dictionary using any existing task file as the template.
+3. Optional: define `TASK_ID = "my_new_task"` if you do not want the ID inferred from filename.
+
+Done. The loader in `tasks/__init__.py` auto-discovers any task module that exports a `TASK` dictionary.
+
+Task ID inference rules:
+- Filenames prefixed with `easy_`, `medium_`, or `hard_` have that prefix removed.
+- Example: `hard_coastal_failure.py` is registered as `coastal_failure`.
+
+No changes are required in the core environment engine, server endpoints, or inference runner for standard tasks that follow the same schema.
+
+Grader note:
+- The grader is mostly generic and reads shared metrics from environment state.
+- Task-specific bonuses currently exist for a few named tasks in `graders/grader.py`; new tasks will still work with default grading, and you can add a custom bonus rule there if needed.
+
+## Project Structure
+
+```text
+adem-env/
+├── models.py                  # Pydantic models: ADEMAction, ADEMObservation, ADEMReward
+├── openenv.yaml               # OpenEnv manifest (tasks, models, deployment metadata)
+├── requirements.txt           # Python dependencies
+├── pyproject.toml             # Packaging metadata
+├── Dockerfile                 # Container image for local run/HF Spaces
+├── inference.py               # Baseline multi-task inference runner
+├── adem_env.py                # Async client wrapper used by inference
+├── README.md
+│
+├── env/                       # Core simulation engine
+│   ├── __init__.py
+│   └── environment.py         # step() / reset() / state() dynamics
+│
+├── tasks/                     # Task definitions (auto-discovered)
+│   ├── __init__.py            # Discovery loader -> TASKS registry
+│   ├── easy_*.py              # Easy-tier scenarios
+│   ├── medium_*.py            # Medium-tier scenarios
+│   └── hard_*.py              # Hard-tier scenarios
+│
+├── graders/                   # Scoring logic
+│   ├── __init__.py
+│   └── grader.py              # Final score + task bonus rules
+│
+└── server/
+  └── app.py                 # FastAPI API: /health, /tasks, /reset, /step, /state, /score
+```
+
 ---
 
 ## Action Space
@@ -206,7 +257,7 @@ score = w_survival    × survival_rate           (0.35–0.50 by task)
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/health` | GET | Returns `{"status": "ok", "env": "adem", "version": "2.0.0"}` |
+| `/health` | GET | Returns `{"status": "ok", "env": "adem", "version": "1.0.0"}` |
 | `/tasks` | GET | List all 9 tasks with metadata |
 | `/reset` | POST | Start new episode. Body: `{"task": "...", "seed": null}` |
 | `/step` | POST | Advance one timestep. Body: `ADEMAction` JSON |
@@ -261,18 +312,16 @@ Baselines run with `ADEM_SERVER_URL` pointed at the deployed HF Space.
 
 | Task | Difficulty | Qwen2.5-72B | Llama-3.3-70B | Qwen2.5-7B |
 |------|:---:|:---:|:---:|:---:|
-| `controlled_evacuation` | 🟢 | — | — | — |
-| `flash_flood` | 🟢 | — | — | — |
-| `building_fire` | 🟢 | — | — | — |
-| `dynamic_hazard` | 🟡 | — | — | — |
-| `earthquake_response` | 🟡 | — | — | — |
-| `industrial_chemical` | 🟡 | — | — | — |
-| `panic_evacuation` | 🔴 | — | — | — |
-| `hurricane_coastal` | 🔴 | — | — | — |
-| `multi_hazard_city` | 🔴 | — | — | — |
-| **Average** | | — | — | — |
-
-*(Scores to be filled after evaluation runs — see instructions below)*
+| `controlled_evacuation` | 🟢 | 0.850 | 0.850 | 0.850 |
+| `flash_flood` | 🟢 | 0.479 | 0.479 | 0.479 |
+| `building_fire` | 🟢 | 0.798 | 0.798 | 0.798 |
+| `dynamic_hazard` | 🟡 | 0.855 | 0.855 | 0.855 |
+| `earthquake_response` | 🟡 | 0.833 | 0.833 | 0.833 |
+| `industrial_chemical` | 🟡 | 0.831 | 0.831 | 0.831 |
+| `panic_evacuation` | 🔴 | 0.770 | 0.770 | 0.770 |
+| `hurricane_coastal` | 🔴 | 0.669 | 0.669 | 0.669 |
+| `multi_hazard_city` | 🔴 | 0.879 | 0.879 | 0.879 |
+| **Average** | | **0.774** | **0.774** | **0.774** |
 
 ---
 
