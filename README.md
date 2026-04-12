@@ -324,33 +324,38 @@ docker stop adem && docker rm adem
 
 ## Baseline Scores
 
-Baselines run with `ADEM_SERVER_URL` pointed at the deployed HF Space.
+All baselines below were run via Groq free tier.
 
-Important integrity note:
-- The table below is **provisional** because prior runs hit model-auth errors and fell back to heuristics.
-- For submission-grade model comparison, regenerate with strict mode (`STRICT_BASELINE=1`) and valid model credentials.
-
-| Task | Difficulty | Qwen2.5-72B | Llama-3.3-70B | Qwen2.5-7B |
+| Task | Difficulty | Llama 3.1 8B | Llama 4 Scout 17B | Llama 3.3 70B |
 |------|:---:|:---:|:---:|:---:|
-| `controlled_evacuation` | Easy | 0.850 | 0.850 | 0.850 |
-| `flash_flood` | Easy | 0.479 | 0.479 | 0.479 |
-| `building_fire` | Easy | 0.798 | 0.798 | 0.798 |
-| `dynamic_hazard` | Medium | 0.855 | 0.855 | 0.855 |
-| `earthquake_response` | Medium | 0.833 | 0.833 | 0.833 |
-| `industrial_chemical` | Medium | 0.831 | 0.831 | 0.831 |
-| `panic_evacuation` | Hard | 0.770 | 0.770 | 0.770 |
-| `hurricane_coastal` | Hard | 0.669 | 0.669 | 0.669 |
-| `multi_hazard_city` | Hard | 0.879 | 0.879 | 0.879 |
-| **Average** | | **0.774** | **0.774** | **0.774** |
+| `controlled_evacuation` | Easy | 0.823 | 0.762 | 0.811 |
+| `flash_flood` | Easy | 0.389 | 0.395 | 0.461 |
+| `building_fire` | Easy | 0.579 | 0.609 | 0.712* |
+| `dynamic_hazard` | Medium | 0.745 | 0.734 | 0.740* |
+| `earthquake_response` | Medium | 0.000 | 0.000 | 0.770* |
+| `industrial_chemical` | Medium | 0.675 | 0.680 | 0.692* |
+| `panic_evacuation` | Hard | 0.731 | 0.775 | 0.778* |
+| `hurricane_coastal` | Hard | 0.000 | 0.000 | 0.504* |
+| `multi_hazard_city` | Hard | 0.000 | 0.685 | 0.000* |
+| **Average** | | **0.438** | **0.516** | **0.608*** |
 
-### Trusted Baseline Protocol (For Final Submission)
+`*` Llama 3.3 70B was rate-limited by Groq free tier (HTTP 429). Values combine the initial run plus resumed continuations from `building_fire`, `earthquake_response`, and `panic_evacuation`; `multi_hazard_city` remains affected by throttling.
+
+Key observations:
+- No single model dominates all tasks: the 8B model is stable on several tasks, while Scout 17B peaks on `panic_evacuation` and `multi_hazard_city`.
+- `flash_flood` is deceptively difficult for all models because early water spread quickly collapses viable corridors.
+- `earthquake_response` and `hurricane_coastal` remain high-variance failure points under strict JSON/action requirements.
+- Larger models show stronger multi-region reasoning in some hard tasks, but rate limits can erase that advantage in long runs.
+- Scores are non-deterministic due LLM sampling and parser sensitivity; moderate variance across reruns is expected.
+
+### Trusted Baseline Protocol 
 
 Run with strict mode so authentication/model errors cannot produce fallback-based scores:
 
 ```bat
 set ADEM_SERVER_URL=https://astha28-adem-env.hf.space
-set API_BASE_URL=https://router.huggingface.co/v1
-set OPENAI_API_KEY=<your_valid_model_api_key>
+set API_BASE_URL=https://api.groq.com/openai/v1
+set API_KEY=<your_groq_api_key>
 set STRICT_BASELINE=1
 set ALLOW_HEURISTIC_FALLBACK=0
 set PRECHECK_MODEL_ACCESS=1
@@ -359,13 +364,13 @@ set PRECHECK_MODEL_ACCESS=1
 Then run per model:
 
 ```bat
-set MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+set MODEL_NAME=llama-3.1-8b-instant
 python inference.py 2>&1 | findstr "[END]"
 
-set MODEL_NAME=meta-llama/Llama-3.3-70B-Instruct
+set MODEL_NAME=meta-llama/llama-4-scout-17b-16e-instruct
 python inference.py 2>&1 | findstr "[END]"
 
-set MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+set MODEL_NAME=llama-3.3-70b-versatile
 python inference.py 2>&1 | findstr "[END]"
 ```
 
@@ -380,12 +385,12 @@ Accept runs only if:
 
 | Variable | Description | Default |
 |---|---|---|
-| `OPENAI_API_KEY` | OpenAI-compatible API key (preferred by baseline script) | Not set |
+| `OPENAI_API_KEY` | OpenAI-compatible API key | Required |
 | `API_BASE_URL` | LLM API endpoint | `https://router.huggingface.co/v1` |
 | `MODEL_NAME` | Model identifier | `Qwen/Qwen2.5-72B-Instruct` |
-| `HF_TOKEN` | HuggingFace token (supported fallback key) | Not set |
-| `API_KEY` | Generic API key fallback | Not set |
-| `ADEM_SERVER_URL` | Connect to existing server (overrides Docker) | Not set |
+| `HF_TOKEN` | HuggingFace token | Required |
+| `API_KEY` | Generic API key | Required |
+| `ADEM_SERVER_URL` | Connect to existing server (overrides Docker) | `https://astha28-adem-env.hf.space` |
 | `LOCAL_IMAGE_NAME` | Local Docker image name | Not set |
 | `ADEM_PORT` | Server port | `7860` |
 
@@ -404,14 +409,3 @@ Accept runs only if:
 - ✅ Working Dockerfile for containerized execution
 - ✅ Baseline `inference.py` with mandatory `[START]`/`[STEP]`/`[END]` log format
 
-## Competition Readiness Checklist
-
-- ✅ Real-world task simulation: adaptive emergency evacuation mirrors real incident command workflows.
-- ✅ OpenEnv spec: typed models + `step()`/`reset()`/`state()` + `openenv.yaml`.
-- ✅ Task ladder: 9 tasks with clear difficulty progression (easy → medium → hard).
-- ✅ Agent grading: deterministic score outputs in `[0.0, 1.0]`.
-- ✅ Meaningful rewards: dense trajectory-level signals for progress, plus penalties for harmful outcomes.
-- ✅ Baseline script: OpenAI client, environment-variable credentials, reproducible structured scoring logs.
-- ✅ Baseline integrity controls: strict mode + precheck to prevent fallback-only benchmark reporting.
-- ✅ Deployment: working Dockerfile and HF Space deployment.
-- ✅ README completeness: environment overview, action/observation spaces, setup, Docker, and baseline scores.

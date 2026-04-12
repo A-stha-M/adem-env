@@ -38,19 +38,18 @@ from adem_env import ADEMAction, ADEMEnv, ADEMObservation
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 LOCAL_IMAGE_NAME: Optional[str] = os.getenv("LOCAL_IMAGE_NAME")
-ADEM_SERVER_URL: Optional[str] = os.getenv("ADEM_SERVER_URL")
+ADEM_SERVER_URL: Optional[str] = os.getenv("ADEM_SERVER_URL", "https://astha28-adem-env.hf.space")
 
 API_KEY: str = (
     os.getenv("OPENAI_API_KEY")
     or os.getenv("HF_TOKEN")
     or os.getenv("API_KEY")
-    or "hf_placeholder"
 )
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 BENCHMARK: str = "adem"
 
-TASKS_TO_RUN: List[str] = [
+DEFAULT_TASKS_TO_RUN: List[str] = [
     "controlled_evacuation",   # Easy
     "flash_flood",             # Easy
     "building_fire",           # Easy
@@ -61,6 +60,17 @@ TASKS_TO_RUN: List[str] = [
     "hurricane_coastal",       # Hard
     "multi_hazard_city",       # Hard
 ]
+
+
+def _env_task_list(name: str, default: List[str]) -> List[str]:
+    val = os.getenv(name)
+    if val is None or not val.strip():
+        return default
+    tasks = [t.strip() for t in val.split(",") if t.strip()]
+    return tasks if tasks else default
+
+
+TASKS_TO_RUN: List[str] = _env_task_list("ADEM_TASKS", DEFAULT_TASKS_TO_RUN)
 
 MAX_STEPS: int = 12           # Hard cap per episode (within task max_steps)
 TEMPERATURE: float = 0.15     # Low temperature for more deterministic routing
