@@ -452,7 +452,7 @@ Authentication note:
 
 | Variable | Description | Default |
 |---|---|---|
-| `OPENAI_API_KEY` | OpenAI-compatible API key (preferred, highest priority) | Not set |
+| `OPENAI_API_KEY` | OpenAI-compatible API key (preferred) | Not set |
 | `API_BASE_URL` | LLM API endpoint | `https://router.huggingface.co/v1` |
 | `MODEL_NAME` | Model identifier | `Qwen/Qwen2.5-72B-Instruct` |
 | `HF_TOKEN` | HuggingFace token (fallback if `OPENAI_API_KEY` is unset) | Not set |
