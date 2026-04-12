@@ -14,8 +14,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy all source files
 COPY openenv.yaml .
 COPY server/ ./server/
+COPY env/ ./env/
+COPY graders/ ./graders/
+COPY tasks/ ./tasks/
 COPY adem_env.py .
-COPY adem/ ./adem/
+COPY models.py .
 
 # Expose port
 EXPOSE 7860
