@@ -10,13 +10,13 @@ from pydantic import BaseModel, Field
 class ADEMObservation(BaseModel):
     """Full observable state of the disaster evacuation environment."""
     population_grid: List[List[int]] = Field(
-        description="NxN grid — number of civilians in each cell"
+        description="NxN grid - number of civilians in each cell"
     )
     hazard_grid: List[List[float]] = Field(
-        description="NxN grid — hazard intensity per cell [0.0, 1.0]"
+        description="NxN grid - hazard intensity per cell [0.0, 1.0]"
     )
     road_blockages: List[List[int]] = Field(
-        description="NxN grid — 0=passable, 1=blocked"
+        description="NxN grid - 0=passable, 1=blocked"
     )
     shelter_capacities: Dict[str, int] = Field(
         description="shelter_id -> maximum occupancy"
@@ -25,13 +25,13 @@ class ADEMObservation(BaseModel):
         description="shelter_id -> current occupants (safely evacuated)"
     )
     congestion_levels: List[List[float]] = Field(
-        description="NxN grid — traffic congestion [0.0, 1.0]"
+        description="NxN grid - traffic congestion [0.0, 1.0]"
     )
     panic_levels: List[List[float]] = Field(
-        description="NxN grid — population panic level [0.0, 1.0]"
+        description="NxN grid - population panic level [0.0, 1.0]"
     )
     vulnerable_population_map: List[List[int]] = Field(
-        description="NxN grid — count of mobility-impaired / elderly per cell"
+        description="NxN grid - count of mobility-impaired / elderly per cell"
     )
     available_resources: Dict[str, int] = Field(
         description="resource_type -> count (drones, ambulances)"
@@ -46,7 +46,7 @@ class ADEMObservation(BaseModel):
 class ADEMAction(BaseModel):
     """
     Agent's action for one timestep.
-    All fields are optional — omitted fields = no change to that control.
+    All fields are optional - omitted fields = no change to that control.
     """
     zone_directions: Dict[str, str] = Field(
         default_factory=dict,
@@ -65,7 +65,7 @@ class ADEMAction(BaseModel):
     )
     deploy_drone: Optional[str] = Field(
         default=None,
-        description="Zone 'row,col' to deploy a drone — reduces panic in that zone."
+        description="Zone 'row,col' to deploy a drone - reduces panic in that zone."
     )
 
 

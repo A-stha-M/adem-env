@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from adem.models import ADEMAction, ADEMObservation
+from models import ADEMAction, ADEMObservation
 
 # Re-export for inference.py convenience
 __all__ = ["ADEMEnv", "ADEMAction", "ADEMObservation", "StepResult"]

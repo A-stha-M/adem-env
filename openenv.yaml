@@ -1,76 +1,151 @@
 name: adem-env
-version: "1.0.0"
+version: "2.0.0"
 description: >
-  Adaptive Disaster Evacuation Management (ADEM) — an RL environment where
-  an AI agent acts as a central disaster command system. It dynamically routes
-  populations, allocates shelters, controls traffic flow, and responds to
-  spreading hazards to minimize casualties under uncertainty.
+  Adaptive Disaster Evacuation Management (ADEM) — an OpenEnv-compliant RL environment
+  where an AI agent acts as a central disaster command system. The agent dynamically
+  routes civilian populations, allocates shelter resources, controls traffic flow,
+  and responds to spreading multi-hazard scenarios to minimize casualties under
+  uncertainty. Features wind-driven hazard spread, panic crowd dynamics, earthquake
+  aftershocks, and simultaneous multi-hazard scenarios across 9 tasks.
 author: "your-hf-username"
 license: MIT
 tags:
+  - openenv
   - emergency-management
   - multi-objective-rl
   - real-world
   - disaster-response
   - crowd-dynamics
+  - safety-critical
 
 tasks:
   - name: controlled_evacuation
-    description: >
-      Small 6x6 grid city, single static hazard, low population (50 people),
-      2 shelters. Agent learns basic routing and shelter allocation.
+    description: "6×6 city, single static fire, ~48 civilians, 2 shelters. Teaches basic routing."
     difficulty: easy
     max_steps: 15
+    grid_size: 6
+
+  - name: flash_flood
+    description: "6×6 low-land, rising floodwater from north edge, 64 civilians, 3 elevated shelters. Speed critical."
+    difficulty: easy
+    max_steps: 15
+    grid_size: 6
+
+  - name: building_fire
+    description: "7×7 urban block, wind-driven fire spreads east, 85 civilians, 2 east exit shelters."
+    difficulty: easy
+    max_steps: 15
+    grid_size: 7
 
   - name: dynamic_hazard
-    description: >
-      8x8 city, hazard spreads over time blocking roads dynamically,
-      multiple population clusters (120 people), 3 shelters.
-      Agent must continuously re-route evacuees.
+    description: "8×8 city, spreading wildfire, ~130 civilians in clusters, 3 shelters. Continuous re-routing."
     difficulty: medium
     max_steps: 20
+    grid_size: 8
+
+  - name: earthquake_response
+    description: "8×8 post-earthquake, 5 roads pre-blocked, aftershocks block more, 125 panicked civilians."
+    difficulty: medium
+    max_steps: 20
+    grid_size: 8
+
+  - name: industrial_chemical
+    description: "9×9 industrial district, toxic plume drifts east via wind, 165 civilians race the plume."
+    difficulty: medium
+    max_steps: 20
+    grid_size: 9
 
   - name: panic_evacuation
-    description: >
-      10x10 city, 2 simultaneous hazard sources, 230+ people with panic
-      dynamics (population partially ignores instructions), vulnerable groups,
-      limited shelter capacity. Tests advanced crowd management and prioritization.
+    description: "10×10, 2 simultaneous hazards, 230+ civilians with panic dynamics, 4 limited shelters."
     difficulty: hard
     max_steps: 25
+    grid_size: 10
+
+  - name: hurricane_coastal
+    description: "10×10 coastal city, storm surge advances north, 238 civilians, pre-flooded roads, intensifying storm."
+    difficulty: hard
+    max_steps: 25
+    grid_size: 10
+
+  - name: multi_hazard_city
+    description: "10×10 mega-city, 3 SIMULTANEOUS hazards (wildfire+flood+chemical), 315+ civilians, central pre-blocked. Frontier challenge."
+    difficulty: hard
+    max_steps: 30
+    grid_size: 10
 
 observation_space:
   type: object
   properties:
-    population_grid: {type: array, description: "NxN grid of people per cell"}
-    hazard_grid: {type: array, description: "NxN grid of hazard intensity 0.0-1.0"}
-    road_blockages: {type: array, description: "NxN grid, 1=blocked 0=open"}
-    shelter_capacities: {type: object, description: "shelter_id -> max capacity"}
-    shelter_populations: {type: object, description: "shelter_id -> current count"}
-    congestion_levels: {type: array, description: "NxN grid 0.0-1.0"}
-    panic_levels: {type: array, description: "NxN grid 0.0-1.0"}
-    vulnerable_population_map: {type: array, description: "NxN grid of vulnerable people"}
-    available_resources: {type: object, description: "resource_type -> count"}
-    time_remaining: {type: integer}
-    total_population: {type: integer}
-    evacuated: {type: integer}
-    casualties: {type: integer}
-    grid_size: {type: integer}
+    population_grid:
+      type: array
+      description: "NxN grid of civilians per cell (Python int)"
+    hazard_grid:
+      type: array
+      description: "NxN grid of hazard intensity [0.0, 1.0] — >0.65 causes casualties"
+    road_blockages:
+      type: array
+      description: "NxN grid — 0=passable, 1=blocked (by hazard, earthquake, or storm)"
+    shelter_capacities:
+      type: object
+      description: "shelter_id -> maximum occupancy (int)"
+    shelter_populations:
+      type: object
+      description: "shelter_id -> current safely evacuated count (int)"
+    congestion_levels:
+      type: array
+      description: "NxN grid — traffic congestion [0.0, 1.0] based on density"
+    panic_levels:
+      type: array
+      description: "NxN grid — panic [0.0, 1.0]; reduces civilian compliance with agent orders"
+    vulnerable_population_map:
+      type: array
+      description: "NxN grid — elderly/mobility-impaired count per cell"
+    available_resources:
+      type: object
+      description: "resource_type -> count (drones reduce panic; ambulances tracked)"
+    time_remaining:
+      type: integer
+      description: "Steps remaining in episode"
+    total_population:
+      type: integer
+      description: "Initial population at episode start (constant)"
+    evacuated:
+      type: integer
+      description: "Cumulative count of civilians safely sheltered"
+    casualties:
+      type: integer
+      description: "Cumulative deaths from hazard exposure"
+    grid_size:
+      type: integer
+      description: "Side length N of the square grid"
 
 action_space:
   type: object
   properties:
     zone_directions:
       type: object
-      description: "Map of 'row,col' -> direction (N/S/E/W/STAY) for each zone"
+      description: >
+        Map 'row,col' -> direction string {N, S, E, W, STAY}.
+        Instructs civilians in that cell to move one step in that direction.
+        Panic reduces actual compliance (max ~35% non-compliance in hard tasks).
     road_controls:
       type: object
-      description: "Map of 'row,col' -> bool (true=open, false=close)"
+      description: >
+        Map 'row,col' -> bool. true=open the road, false=close it.
+        Can clear earthquake debris or re-route civilian flow.
     resource_allocations:
       type: object
-      description: "Map of shelter_id -> extra resource units to allocate"
+      description: "Map shelter_id -> integer resource units to send there."
     deploy_drone:
       type: string
-      description: "Zone 'row,col' to deploy guidance drone (reduces panic)"
+      description: >
+        'row,col' of zone to deploy a drone. Reduces panic by -0.35 in
+        target cell and -0.10 in 4 adjacent cells. Consumes 1 drone.
 
-endpoint: http://localhost:8000
+endpoint: http://localhost:7860
 health_check: /health
+
+runtime:
+  python: ">=3.10"
+  framework: fastapi
+  port: 7860

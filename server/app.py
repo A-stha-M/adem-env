@@ -10,10 +10,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from adem.env import ADEMEnvironment
-from adem.grader import ADEMGrader
-from adem.models import ADEMAction, ADEMObservation
-from adem.tasks import TASKS
+from env import ADEMEnvironment
+from graders import ADEMGrader
+from models import ADEMAction, ADEMObservation
+from tasks import TASKS
 
 app = FastAPI(
     title="ADEM — Adaptive Disaster Evacuation Management",

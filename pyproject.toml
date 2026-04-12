@@ -25,9 +25,12 @@ dev = [
 server = "server.app:main"
 
 [tool.setuptools]
-packages = ["adem", "server"]
+packages = ["env", "graders", "server", "tasks"]
+py-modules = ["adem_env", "models"]
 include-package-data = true
 
 [tool.setuptools.package-dir]
-adem = "adem"
+env = "env"
+graders = "graders"
 server = "server"
+tasks = "tasks"
