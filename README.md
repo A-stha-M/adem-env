@@ -260,6 +260,20 @@ score = w_survival    × survival_rate           (0.35–0.50 by task)
 - `hurricane_coastal`: +0.04 for clearing all civilians from coastal strip
 - `multi_hazard_city`: +0.015 per hazard origin zone cleared of population
 
+### Per-Step Shaping (Includes Penalties)
+
+Negative per-step rewards are expected in ADEM when casualties, congestion, or hazard exposure rises.
+
+| Signal | Reward Contribution |
+|---|---:|
+| Evacuating civilians | `+0.050 × people_evacuated_this_step` |
+| Casualties | `-0.080 × casualties_this_step` |
+| Congestion pressure | `-0.030 × mean_congestion × 10` |
+| Population in high-risk cells | `-0.040 × high_risk_pop_ratio × 10` |
+| Time pressure (every step) | `-0.002` |
+
+Because of this shaping, step-level rewards can be negative even when the policy is partially correct. Final graded score remains normalized to `[0, 1]`.
+
 ---
 
 ## API Endpoints
@@ -272,6 +286,34 @@ score = w_survival    × survival_rate           (0.35–0.50 by task)
 | `/step` | POST | Advance one timestep. Body: `ADEMAction` JSON |
 | `/state` | GET | Current episode state summary |
 | `/score` | GET | Final episode score (call after episode ends) |
+
+### API Usage
+
+```bash
+# List available tasks
+curl http://localhost:7860/tasks
+
+# Reset (start a new episode)
+curl -X POST http://localhost:7860/reset \
+  -H "Content-Type: application/json" \
+  -d '{"task": "controlled_evacuation", "seed": null}'
+
+# Step (take an action)
+curl -X POST http://localhost:7860/step \
+  -H "Content-Type: application/json" \
+  -d '{
+    "zone_directions": {"1,1": "S", "2,3": "E"},
+    "road_controls": {"3,2": true},
+    "resource_allocations": {},
+    "deploy_drone": "4,4"
+  }'
+
+# Get current episode state
+curl http://localhost:7860/state
+
+# Get final score
+curl http://localhost:7860/score
+```
 
 ---
 
@@ -295,6 +337,27 @@ set ADEM_SERVER_URL=http://localhost:7860
 set API_BASE_URL=https://router.huggingface.co/v1
 set MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
 python inference.py
+```
+
+### Running Inference
+
+```bash
+export API_KEY=your_api_key
+export API_BASE_URL=https://api.groq.com/openai/v1
+export MODEL_NAME=llama-3.3-70b-versatile
+export ADEM_SERVER_URL=https://astha28-adem-env.hf.space
+
+python inference.py
+```
+
+The inference script runs a baseline LLM agent against configured tasks and emits structured logs:
+
+```text
+[START] task=controlled_evacuation env=adem model=llama-3.3-70b-versatile
+[STEP] step=1 action={"zone_directions":{"1,1":"S"}} reward=-0.01 done=false error=null
+[STEP] step=2 action={"zone_directions":{"2,3":"E"}} reward=0.24 done=false error=null
+[STEP] step=3 action={"zone_directions":{"3,4":"E"}} reward=0.09 done=false error=null
+[END] success=true steps=12 score=0.811 rewards=-0.09,-0.01,...
 ```
 
 ### Baseline Inference Design
@@ -330,16 +393,16 @@ All baselines below were run via Groq free tier.
 |------|:---:|:---:|:---:|:---:|
 | `controlled_evacuation` | Easy | 0.823 | 0.762 | 0.811 |
 | `flash_flood` | Easy | 0.389 | 0.395 | 0.461 |
-| `building_fire` | Easy | 0.579 | 0.609 | 0.712* |
-| `dynamic_hazard` | Medium | 0.745 | 0.734 | 0.740* |
-| `earthquake_response` | Medium | 0.000 | 0.000 | 0.770* |
-| `industrial_chemical` | Medium | 0.675 | 0.680 | 0.692* |
-| `panic_evacuation` | Hard | 0.731 | 0.775 | 0.778* |
-| `hurricane_coastal` | Hard | 0.000 | 0.000 | 0.504* |
-| `multi_hazard_city` | Hard | 0.000 | 0.685 | 0.000* |
-| **Average** | | **0.438** | **0.516** | **0.608*** |
+| `building_fire` | Easy | 0.579 | 0.609 | 0.712 |
+| `dynamic_hazard` | Medium | 0.745 | 0.734 | 0.740 |
+| `earthquake_response` | Medium | 0.000 | 0.000 | 0.770 |
+| `industrial_chemical` | Medium | 0.675 | 0.680 | 0.692 |
+| `panic_evacuation` | Hard | 0.731 | 0.775 | 0.778 |
+| `hurricane_coastal` | Hard | 0.000 | 0.000 | 0.504 |
+| `multi_hazard_city` | Hard | 0.000 | 0.685 | 0.740 |
+| **Average** | | **0.438** | **0.516** | **0.690** |
 
-`*` Llama 3.3 70B was rate-limited by Groq free tier (HTTP 429). Values combine the initial run plus resumed continuations from `building_fire`, `earthquake_response`, and `panic_evacuation`; `multi_hazard_city` remains affected by throttling.
+Llama 3.3 70B values were assembled across resumed runs due intermittent Groq free-tier HTTP 429 throttling.
 
 Key observations:
 - No single model dominates all tasks: the 8B model is stable on several tasks, while Scout 17B peaks on `panic_evacuation` and `multi_hazard_city`.
@@ -383,15 +446,22 @@ Accept runs only if:
 
 ## Environment Variables
 
+Authentication note:
+- Set only one of `OPENAI_API_KEY`, `HF_TOKEN`, or `API_KEY`.
+- The script resolves keys in this order: `OPENAI_API_KEY` -> `HF_TOKEN` -> `API_KEY`.
+
 | Variable | Description | Default |
 |---|---|---|
-| `OPENAI_API_KEY` | OpenAI-compatible API key | Required |
+| `OPENAI_API_KEY` | OpenAI-compatible API key (preferred, highest priority) | Not set |
 | `API_BASE_URL` | LLM API endpoint | `https://router.huggingface.co/v1` |
 | `MODEL_NAME` | Model identifier | `Qwen/Qwen2.5-72B-Instruct` |
-| `HF_TOKEN` | HuggingFace token | Required |
-| `API_KEY` | Generic API key | Required |
+| `HF_TOKEN` | HuggingFace token (fallback if `OPENAI_API_KEY` is unset) | Not set |
+| `API_KEY` | Generic API key (final fallback) | Not set |
+| `ADEM_TASKS` | Comma-separated task IDs to run in inference | `controlled_evacuation,flash_flood,building_fire,dynamic_hazard,earthquake_response,industrial_chemical,panic_evacuation,hurricane_coastal,multi_hazard_city` |
+| `STRICT_BASELINE` | Fail fast on LLM API/parse errors | `1` |
+| `ALLOW_HEURISTIC_FALLBACK` | Allow heuristic fallback when strict mode is off | `0` when strict mode is on |
+| `PRECHECK_MODEL_ACCESS` | Run model-auth/access precheck before tasks | `1` when strict mode is on |
 | `ADEM_SERVER_URL` | Connect to existing server (overrides Docker) | `https://astha28-adem-env.hf.space` |
-| `LOCAL_IMAGE_NAME` | Local Docker image name | Not set |
 | `ADEM_PORT` | Server port | `7860` |
 
 ---
